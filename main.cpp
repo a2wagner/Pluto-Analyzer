@@ -14,6 +14,9 @@
 #include <map>
 #include <algorithm>  // for_each
 //#include <initializer_list>  // C++11, usage of -std=gnu++11 or -std=c++11 required
+// accessing files and directories
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #include <TROOT.h>
 #include <TFile.h>
@@ -156,7 +159,8 @@ int main(int argc, char **argv)
 	const int nFiles = 1;//5;
 	char sim_files[nChannels*nFiles][100];
 	const char* path = "/data/simulation/background/channels/new_triggerTesting_5M";
-	const char* ext = "png";
+	const char* ext = "pdf";
+	const char* save = "plots";
 	// READ_LIMIT is set above before method declarations
 	std::cout << "The following data path will be used: " << path << std::endl
 	<< "Number of files per channel: " << nFiles << std::endl
@@ -168,7 +172,25 @@ int main(int argc, char **argv)
 	for (ICIter it = channel.begin(); it != channel.end(); ++it)
 		for (UInt_t i = 1; i <= nFiles; i++)
 			sprintf(sim_files[nFiles*it->first+i-1], "%s/sim_%s_%02d.root", path, it->second, i);
-	std::cout << "Plots will be saved as " << ext << std::endl << std::endl;
+	std::cout << "Plots will be saved as " << ext << std::endl;
+	//std::cout << "Save directory is " << save << std::endl << std::endl;
+
+	// check if specified save directory exists
+	struct stat s;
+	if (stat(save, &s)) {  // directory cannot be accessed, seems to not exist, create it
+		std::cout << "Create save directory " << save << std::endl;
+		if(!mkdir(save, S_IRWXU))
+			std::cout << "Directory created successfully." << std::endl << std::endl;
+		else {
+			perror("Creating directory failed: ");
+			exit(1);
+		}
+	} else if (s.st_mode & S_IFDIR)
+		printf("Save directory is \"%s\"\n\n", save);
+	else {
+		printf("%s is not a directory!\n", save);
+		exit(1);
+	}
 
 	// colors which will be used for the 1D histograms
 	Int_t color[7] = {kRed+1, kAzure, kGreen+2, kOrange-3, kSpring-8, kCyan-3, kRed+2};
@@ -259,7 +281,7 @@ int main(int argc, char **argv)
 				h_tmp->SetTitle("");
 				h_tmp->Draw();
 				c->Update();
-				sprintf(buffer, "plots/energy_sum_%s.%s", identifier.find(it->first)->second, ext);
+				sprintf(buffer, "%s/energy_sum_%s.%s", save, identifier.find(it->first)->second, ext);
 				c->Print(buffer);
 			} else if (strstr(h_tmp->GetTitle(), "ESum thetaConstr")) {
 				c->Clear();
@@ -267,7 +289,7 @@ int main(int argc, char **argv)
 				h_tmp->SetTitle("");
 				h_tmp->Draw();
 				c->Update();
-				sprintf(buffer, "plots/energy_sum_thetaConstr_%s.%s", identifier.find(it->first)->second, ext);
+				sprintf(buffer, "%s/energy_sum_thetaConstr_%s.%s", save, identifier.find(it->first)->second, ext);
 				c->Print(buffer);
 				// now change the color and fill style and add the histogram to a stack
 				h_tmp->SetLineColor(color[it->first]);
@@ -280,7 +302,7 @@ int main(int argc, char **argv)
 				l_c->Add(h_tmp);
 				h_tmp->Draw("COLZ");
 				c2->Update();
-				sprintf(buffer, "plots/nPart_vs_ESumConstr_%s.%s", identifier.find(it->first)->second, ext);
+				sprintf(buffer, "%s/nPart_vs_ESumConstr_%s.%s", save, identifier.find(it->first)->second, ext);
 				c2->Print(buffer);
 				c->cd();
 			} else {  // histograms of decay particles don't have a histogram title
@@ -297,7 +319,7 @@ int main(int argc, char **argv)
 		hs->Draw();
 		leg->Draw("SAME");
 		c->Update();
-		sprintf(buffer, "plots/energies_%s.%s", identifier.find(it->first)->second, ext);
+		sprintf(buffer, "%s/energies_%s.%s", save, identifier.find(it->first)->second, ext);
 		c->Print(buffer);
 	}
 	// after iterating over all channels draw the energies of the protons from the different channels now
@@ -327,7 +349,7 @@ int main(int argc, char **argv)
 		h_tmp->Draw("SAME");
 	leg->Draw("SAME");
 	c->Update();
-	sprintf(buffer, "plots/proton_energies.%s", ext);
+	sprintf(buffer, "%s/proton_energies.%s", save, ext);
 	c->Print(buffer);
 	// draw the stack with the theta constrained energy sum
 	c->Clear();
@@ -341,7 +363,7 @@ int main(int argc, char **argv)
 	leg->SetY2NDC(.94);
 	leg->Draw("SAME");  // legend should be the same as in the above case
 	c->Update();
-	sprintf(buffer, "plots/energy_sums_theta_constraint.%s", ext);
+	sprintf(buffer, "%s/energy_sums_theta_constraint.%s", save, ext);
 	c->Print(buffer);
 	// change legend position back
 	leg->SetX1NDC(.64);
@@ -356,7 +378,7 @@ int main(int argc, char **argv)
 	h_tmp->Merge(l_c);
 	h_tmp->Draw("COLZ");
 	c2->Update();
-	sprintf(buffer, "plots/nPart_vs_ESumConstr_sum.%s", ext);
+	sprintf(buffer, "%s/nPart_vs_ESumConstr_sum.%s", save, ext);
 	c2->Print(buffer);
 	c->cd();
 		
@@ -430,7 +452,7 @@ int main(int argc, char **argv)
 		hs->Draw();
 		leg->Draw("SAME");
 		c->Update();
-		sprintf(buffer, "plots/thetas_%s.%s", identifier.find(it->first)->second, ext);
+		sprintf(buffer, "%s/thetas_%s.%s", save, identifier.find(it->first)->second, ext);
 		c->Print(buffer);
 	}
 	// after iterating over all channels draw the energies of the protons from the different channels now
@@ -458,7 +480,7 @@ int main(int argc, char **argv)
 		h_tmp->Draw("SAME");
 	leg->Draw("SAME");
 	c->Update();
-	sprintf(buffer, "plots/proton_thetas.%s", ext);
+	sprintf(buffer, "%ss/proton_thetas.%s", save, ext);
 	c->Print(buffer);
 
 	delete l_p;
@@ -540,7 +562,7 @@ int main(int argc, char **argv)
 				h_tmp->SetTitle("");
 			}
 			h_tmp->Draw("COLZ");
-			sprintf(buffer, "plots/theta_vs_energy_%s_%s.%s", identifier.find(it->first)->second, namesFS.find(it->first)->second[j++], ext);
+			sprintf(buffer, "%s/theta_vs_energy_%s_%s.%s", save, identifier.find(it->first)->second, namesFS.find(it->first)->second[j++], ext);
 			c2->Update();
 			c2->Print(buffer);
 		}
