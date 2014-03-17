@@ -31,11 +31,583 @@
 typedef std::map<int, const char*> IntCharMap;
 typedef std::pair<int, const char*> ICPair;
 typedef std::map<int, const char*>::iterator ICIter;
+// for handling of different final state particles
+typedef std::map<int, std::vector<int>> IntVecintMap;
+typedef std::map<int, std::vector<const char*>> IntVecharMap;
+typedef std::pair<int, std::vector<int>> IViPair;
+typedef std::pair<int, std::vector<const char*>> IVcPair;
+typedef std::map<int, std::vector<int>>::iterator IViIter;
+typedef std::map<int, std::vector<int>>::const_iterator constIViIter;  // const_iterator needed while iterating through const map
+typedef std::map<int, std::vector<const char*>>::iterator IVcIter;
+// one map containing all 4-vectors (reading all information from MC Tree file only once required)
+typedef std::map<int, std::vector<std::vector<TLorentzVector>>> IntP4Map;
+typedef std::pair<int, std::vector<std::vector<TLorentzVector>>> IP4Pair;
+typedef std::map<int, std::vector<std::vector<TLorentzVector>>>::iterator IP4Iter;
+typedef std::vector<std::vector<TLorentzVector>> VVP4;
+typedef VVP4::const_iterator VVP4Iter;
 
-static const double MASS_PROTON = 938.272;
-static int count = 0;
+//static const double MASS_PROTON = 938.272;
+static int count = 0;  // counter used for individual histogram naming
+static const int READ_LIMIT = 1000000;  // limit to which number events are read per file; number smaller than zero for all events, e. g. -1
 
-void prepare_hist(TH1 *h, const char* x_name, const char* y_name = "#Events", Int_t color = 3)
+int collect_particles(IntP4Map& p4, const IntVecintMap& idx, const char files[][100], const int nFiles = 1);  // structure of two-dimensional char array has to be char a[][n] or, equivalent, char (a*)[n]
+void prepare_hist(TH1 *h, const char* x_name, const char* y_name = "#Events", Int_t color = 3);
+void prepare_hist(THStack *h, const char* x_name, const char* y_name = "#Events");
+TList* energies(const VVP4& p4, const std::vector<int> partIdx);
+TList* thetas(const VVP4& p4, const std::vector<int> partIdx);
+TList* theta_vs_energy(const VVP4& p4, const std::vector<int> partIdx);
+/*TH1F* proton_energy(const char* file, Int_t color);
+TH1F* proton_theta(const char* file, Int_t color);
+THStack* energies_stack(const char* file, Int_t* color, std::vector<int> partIdx);
+TList* theta_vs_energy(const char* file, std::vector<int> partIdx);
+*/TH1F* etapEnergy_etap_eeg(const char* file);
+
+int main(int argc, char **argv)
+{
+	char buffer[50];  // buffer for temporary operations
+	double hMax;  // temporary variable to store maximum value of the histogram
+	int iMax;  // index of histogram with maximum
+	TH1 *h_tmp;  // for temporary histogram usage
+	int j, p;  // counter used for several plots etc.
+	TIter *iter;  // Iterator for TList, used to iterate through THStack and TList
+
+	// vectors used for dynamically changes for histogram stacking and file naming
+	std::vector<int> indices;
+	std::vector<const char*> particles;
+	std::vector<const char*> names;
+
+	enum chan {
+		etap_pi0pi0eta,
+		etap_pi0pi0pi0,
+		etap_pipipi0,
+		etap_omegag,
+		etap_eeg,
+		omega_etag,
+		omega_eepi0,
+		unknown
+	};
+
+	IntCharMap channel;
+	channel.insert(ICPair(etap_pi0pi0eta, "etap_pi0pi0eta"));
+	channel.insert(ICPair(etap_pi0pi0pi0, "etap_pi0pi0pi0"));
+	channel.insert(ICPair(etap_pipipi0, "etap_pi+pi-pi0"));
+	channel.insert(ICPair(etap_omegag, "etap_omegag"));
+	channel.insert(ICPair(etap_eeg, "etap_e+e-g"));
+	channel.insert(ICPair(omega_etag, "omega_etag"));
+	channel.insert(ICPair(omega_eepi0, "omega_e+e-pi0"));
+
+	IntCharMap identifier;
+	identifier.insert(ICPair(etap_pi0pi0eta, "etap_pi0pi0eta"));
+	identifier.insert(ICPair(etap_pi0pi0pi0, "etap_pi0pi0pi0"));
+	identifier.insert(ICPair(etap_pipipi0, "etap_pipipi0"));
+	identifier.insert(ICPair(etap_omegag, "etap_omegag"));
+	identifier.insert(ICPair(etap_eeg, "etap_eeg"));
+	identifier.insert(ICPair(omega_etag, "omega_etag"));
+	identifier.insert(ICPair(omega_eepi0, "omega_eepi0"));
+
+	// legend entry when only one value of a channel is used in a plot
+	IntCharMap legend;
+	legend.insert(ICPair(etap_pi0pi0eta, "#eta'#rightarrow#pi^{0}#pi^{0}#eta"));
+	legend.insert(ICPair(etap_pi0pi0pi0, "#eta'#rightarrow#pi^{0}#pi^{0}#pi^{0}"));
+	legend.insert(ICPair(etap_pipipi0, "#eta'#rightarrow#pi^{+}#pi^{-}#pi^{0}"));
+	legend.insert(ICPair(etap_omegag, "#eta'#rightarrow#omega#gamma"));
+	legend.insert(ICPair(etap_eeg, "#eta'#rightarrowe^{+}e^{-}#gamma"));
+	legend.insert(ICPair(omega_etag, "#omega#rightarrow#eta#gamma"));
+	legend.insert(ICPair(omega_eepi0, "#omega#rightarrowe^{+}e^{-}#pi^{0}"));
+
+	// maps containing final state particle information for more automated behaviour
+	IntVecintMap indicesFS;
+	// recoil proton has always the index 1
+	indicesFS.insert(IViPair(etap_pi0pi0eta, {6, 7, 8, 9, 10, 11, 1}));
+	indicesFS.insert(IViPair(etap_pi0pi0pi0, {6, 7, 8, 9, 10, 11, 1}));
+	indicesFS.insert(IViPair(etap_pipipi0, {3, 4, 6, 7, 1}));
+	indicesFS.insert(IViPair(etap_omegag, {4, 6, 7, 8, 1}));
+	indicesFS.insert(IViPair(etap_eeg, {5, 6, 4, 1}));
+	indicesFS.insert(IViPair(omega_etag, {4, 5, 6, 1}));
+	indicesFS.insert(IViPair(omega_eepi0, {7, 8, 5, 6, 1}));
+	IntVecharMap particlesFS;
+	particlesFS.insert(IVcPair(etap_pi0pi0eta, {"#gamma_{1}(#pi^{0}_{1})", "#gamma_{2}(#pi^{0}_{1})", "#gamma_{3}(#pi^{0}_{2})", "#gamma_{4}(#pi^{0}_{2})", "#gamma_{5}(#eta)", "#gamma_{6}(#eta)", "p"}));
+	particlesFS.insert(IVcPair(etap_pi0pi0pi0, {"#gamma_{1}(#pi^{0}_{1})", "#gamma_{2}(#pi^{0}_{1})", "#gamma_{3}(#pi^{0}_{2})", "#gamma_{4}(#pi^{0}_{2})", "#gamma_{5}(#pi^{0}_{3})", "#gamma_{6}(#pi^{0}_{3})", "p"}));
+	particlesFS.insert(IVcPair(etap_pipipi0, {"#pi^{+}", "#pi^{-}", "#gamma_{1}", "#gamma_{2}", "p"}));
+	// for omega --> eta g
+	//particlesFS.insert(IVcPair(etap_omegag, {"#gamma_{1}", "#gamma_{2}(#omega)", "#gamma_{3}(#eta)", "#gamma_{4}(#eta)", "p"}));
+	// for omega --> pi0 g
+	particlesFS.insert(IVcPair(etap_omegag, {"#gamma_{1}", "#gamma_{2}(#omega)", "#gamma_{3}(#pi^{0})", "#gamma_{4}(#pi^{0})", "p"}));
+	particlesFS.insert(IVcPair(etap_eeg, {"e^{+}", "e^{-}", "#gamma", "p"}));
+	particlesFS.insert(IVcPair(omega_etag, {"#gamma_{1}(#omega)", "#gamma_{2}(#eta)", "#gamma_{3}(#eta)", "p"}));
+	particlesFS.insert(IVcPair(omega_eepi0, {"e^{+}", "e^{-}", "#gamma_{1}(#pi^{0})", "#gamma_{2}(#pi^{0})", "p"}));
+	IntVecharMap namesFS;
+	namesFS.insert(IVcPair(etap_pi0pi0eta, {"gamma1", "gamma2", "gamma3", "gamma4", "gamma5", "gamma6", "proton"}));
+	namesFS.insert(IVcPair(etap_pi0pi0pi0, {"gamma1", "gamma2", "gamma3", "gamma4", "gamma5", "gamma6", "proton"}));
+	namesFS.insert(IVcPair(etap_pipipi0, {"pi1", "pi2", "gamma1", "gamma2", "proton"}));
+	namesFS.insert(IVcPair(etap_omegag, {"gamma1", "gamma2", "gamma3", "gamma4", "proton"}));
+	namesFS.insert(IVcPair(etap_eeg, {"e1", "e2", "gamma", "proton"}));
+	namesFS.insert(IVcPair(omega_etag, {"gamma1", "gamma2", "gamma3", "proton"}));
+	namesFS.insert(IVcPair(omega_eepi0, {"e1", "e2", "gamma1", "gamma2", "proton"}));
+
+	std::cout << "[INFO] Channel initialisation done!" << std::endl
+	<< "The following channels will be analysed:" << std::endl;
+	for (ICIter it = channel.begin(); it != channel.end(); ++it)
+		printf( "  %s, %d final state particles\n", it->second, indicesFS.find(it->first)->second.size());
+	std::cout << std::endl;
+
+	// char array containing the file names
+	const int nChannels = channel.size();
+	const int nFiles = 1;//5;
+	char sim_files[nChannels*nFiles][100];
+	const char* path = "/data/simulation/background/channels/new_triggerTesting_5M";
+	const char* ext = "png";
+	// READ_LIMIT is set above before method declarations
+	std::cout << "The following data path will be used: " << path << std::endl
+	<< "Number of files per channel: " << nFiles << std::endl
+	<< "Maximum number of events read per file: ";
+	if (READ_LIMIT < 0)
+		std::cout << "all events" << std::endl;
+	else
+		std::cout << READ_LIMIT << std::endl;
+	for (ICIter it = channel.begin(); it != channel.end(); ++it)
+		for (UInt_t i = 1; i <= nFiles; i++)
+			sprintf(sim_files[nFiles*it->first+i-1], "%s/sim_%s_%02d.root", path, it->second, i);
+	std::cout << "Plots will be saved as " << ext << std::endl << std::endl;
+
+	// colors which will be used for the 1D histograms
+	Int_t color[7] = {kRed+1, kAzure, kGreen+2, kOrange-3, kSpring-8, kCyan-3, kRed+2};
+
+	// general settings: set canvas background to white and hide stat box
+	gStyle->SetCanvasColor(0);
+	gStyle->SetOptStat(0);
+
+	// change contour for 2D plots
+	const Int_t nRGBs = 5;
+	const Int_t nCont = 255;
+
+	Double_t stops[nRGBs] = { 0.00, 0.34, 0.61, 0.84, 1.00 };
+	Double_t red[nRGBs]   = { 0.00, 0.00, 0.87, 1.00, 0.51 };
+	Double_t green[nRGBs] = { 0.00, 0.81, 1.00, 0.20, 0.00 };
+	Double_t blue[nRGBs]  = { 0.51, 1.00, 0.12, 0.00, 0.00 };
+	TColor::CreateGradientColorTable(nRGBs, stops, red, green, blue, nCont);
+	gStyle->SetNumberContours(nCont);
+
+	// create canvas for all plots 1D plots
+	TCanvas *c = new TCanvas("c", "1D Plots", 10, 10, 700, 600);
+	c->SetBorderSize(2);
+	c->SetFrameFillColor(0);
+	c->SetFrameBorderMode(0);
+	c->SetLeftMargin(.12);
+	c->SetRightMargin(.05);
+	c->SetBottomMargin(.12);
+	c->SetTopMargin(.05);
+	// and one for the 2D ones
+	TCanvas *c2 = new TCanvas("c2", "2D Plots", 10, 10, 700, 600);
+	c2->SetBorderSize(2);
+	c2->SetFrameFillColor(0);
+	c2->SetFrameBorderMode(0);
+	c2->SetLeftMargin(.12);
+	c2->SetRightMargin(.13);
+	c2->SetBottomMargin(.12);
+	c2->SetTopMargin(.1);
+
+	// gather all needed particle information (4-vectors) from the generated files
+	IntP4Map p4FS;
+	for (IViIter it = indicesFS.begin(); it != indicesFS.end(); ++it)
+		p4FS.insert(IP4Pair(it->first, std::vector<std::vector<TLorentzVector>>(it->second.size())));
+	if (!collect_particles(p4FS, indicesFS, sim_files, nFiles))
+		printf("\n[INFO] All particles collected!\n\n");
+	else
+		printf("\nSome error occurred...\n\n");
+
+	// legend used in some of the histograms
+	TLegend *leg = new TLegend(.64, .6, .94, .94);
+	leg->SetFillColor(0);
+	leg->SetBorderSize(1);
+	leg->SetTextFont(42);
+	leg->SetTextSize(.035);
+
+	// use THStack for plotting several histograms into one canvas
+	THStack *hs;
+
+	// energies final state
+	std::cout << "[INFO] Create plots for energies in the final state" << std::endl;
+	c->cd();
+	THStack *hs_E = new THStack("hs_E", "");
+	TList *l_p = new TList();  // list containing proton energy histograms
+	TList *l_c = new TList();  // list containing 2D histograms of #patricles in CB vs. theta constrained ESum
+	for (IViIter it = indicesFS.begin(); it != indicesFS.end(); ++it) {
+		c->Clear();
+		leg->Clear();
+		// change legend height according to number of entries that it fits better
+		if (it->second.size() > 5)
+			leg->SetY1NDC(.45);
+		else
+			leg->SetY1NDC(.58);
+		leg->SetHeader("Energies FS");
+		if (!hs)
+			delete hs;
+		sprintf(buffer, "h%d%d", count-1, it->first);
+		hs = new THStack(buffer, "");
+		if (!iter)
+			delete iter;
+		iter = new TIter(energies(p4FS.find(it->first)->second, it->second));
+		j = 0;
+		while (h_tmp = (TH1*)iter->Next()) {
+			if (strstr(h_tmp->GetTitle(), "p")) {  // proton
+				h_tmp->SetTitle(legend.find(it->first)->second);  // store current decay channel in histogram title to use it later for the legend entry
+				l_p->Add(h_tmp);
+			} else if (strstr(h_tmp->GetTitle(), "Energy Sum")) {
+				c->Clear();
+				h_tmp->SetLineColor(color[1]);
+				h_tmp->SetTitle("");
+				h_tmp->Draw();
+				c->Update();
+				sprintf(buffer, "plots/energy_sum_%s.%s", identifier.find(it->first)->second, ext);
+				c->Print(buffer);
+			} else if (strstr(h_tmp->GetTitle(), "ESum thetaConstr")) {
+				c->Clear();
+				h_tmp->SetLineColor(color[1]);
+				h_tmp->SetTitle("");
+				h_tmp->Draw();
+				c->Update();
+				sprintf(buffer, "plots/energy_sum_thetaConstr_%s.%s", identifier.find(it->first)->second, ext);
+				c->Print(buffer);
+				// now change the color and fill style and add the histogram to a stack
+				h_tmp->SetLineColor(color[it->first]);
+				h_tmp->SetFillColor(color[it->first]);
+				hs_E->Add(h_tmp);
+			} else if (strstr(h_tmp->GetTitle(), "ESum_nPart")) {
+				c2->cd();
+				c2->Clear();
+				h_tmp->SetTitle("");
+				l_c->Add(h_tmp);
+				h_tmp->Draw("COLZ");
+				c2->Update();
+				sprintf(buffer, "plots/nPart_vs_ESumConstr_%s.%s", identifier.find(it->first)->second, ext);
+				c2->Print(buffer);
+				c->cd();
+			} else {  // histograms of decay particles don't have a histogram title
+				h_tmp->SetLineColor(color[j]);
+				h_tmp->SetFillColor(color[j]);
+				hs->Add(h_tmp);
+				leg->AddEntry(h_tmp, particlesFS.find(it->first)->second[j++], "l");
+			}
+		}
+		// draw the energies of the decay particles
+		c->Clear();
+		hs->Paint();  // TAxis objects of THStack are only created when the Paint function is called, otherwise a segfault occurs
+		prepare_hist(hs, "E [MeV]");
+		hs->Draw();
+		leg->Draw("SAME");
+		c->Update();
+		sprintf(buffer, "plots/energies_%s.%s", identifier.find(it->first)->second, ext);
+		c->Print(buffer);
+	}
+	// after iterating over all channels draw the energies of the protons from the different channels now
+	c->Clear();
+	leg->Clear();
+	leg->SetY1NDC(.6);
+	if (!iter)
+		delete iter;
+	iter = new TIter(l_p);
+	// first find the histogram with the maximum bin (used for proper drawing)
+	j = 0;
+	hMax = 0;
+	while (h_tmp = (TH1*)iter->Next()) {
+		h_tmp->SetLineColor(color[j++]);
+		leg->AddEntry(h_tmp, h_tmp->GetTitle(), "l");
+		h_tmp->SetTitle("");
+		if (hMax < h_tmp->GetBinContent(h_tmp->GetMaximumBin())) {
+			hMax = h_tmp->GetBinContent(h_tmp->GetMaximumBin());
+			iMax = j-1;}
+		//h_tmp->Draw("SAME");
+	}
+	l_p->At(iMax)->Draw();  // draw max hist
+	delete iter;
+	iter = new TIter(l_p);
+	// now draw all the histograms
+	while (h_tmp = (TH1*)iter->Next())
+		h_tmp->Draw("SAME");
+	leg->Draw("SAME");
+	c->Update();
+	sprintf(buffer, "plots/proton_energies.%s", ext);
+	c->Print(buffer);
+	// draw the stack with the theta constrained energy sum
+	c->Clear();
+	hs_E->Paint();  // TAxis objects of THStack are only created when the Paint function is called, otherwise a segfault occurs
+	prepare_hist(hs_E, "E_{sum} CB [MeV]");
+	hs_E->Draw();
+	// move legend to the left
+	leg->SetX1NDC(.17);
+	leg->SetY1NDC(.6);
+	leg->SetX2NDC(.47);
+	leg->SetY2NDC(.94);
+	leg->Draw("SAME");  // legend should be the same as in the above case
+	c->Update();
+	sprintf(buffer, "plots/energy_sums_theta_constraint.%s", ext);
+	c->Print(buffer);
+	// change legend position back
+	leg->SetX1NDC(.64);
+	leg->SetY1NDC(.6);
+	leg->SetX2NDC(.94);
+	leg->SetY2NDC(.94);
+	// lastly draw a summed up 2D histogram of all particle count vs. ESum hists
+	c2->cd();
+	c2->Clear();
+	h_tmp = (TH2F*)l_c->First()->Clone("h_tmp");
+	h_tmp->Reset();
+	h_tmp->Merge(l_c);
+	h_tmp->Draw("COLZ");
+	c2->Update();
+	sprintf(buffer, "plots/nPart_vs_ESumConstr_sum.%s", ext);
+	c2->Print(buffer);
+	c->cd();
+		
+	delete hs_E;
+	delete l_p;
+	delete l_c;
+
+/*	// proton energies
+	c->cd();
+	TH1F* h_Ep[nChannels];
+	for (UInt_t i = 0; i < nChannels; i++)
+		h_Ep[i] = proton_energy(sim_files[i], color[i]);
+	TLegend *leg = new TLegend(.64, .6, .94, .94);
+	leg->SetFillColor(0);
+	leg->SetBorderSize(1);
+	leg->SetTextFont(42);
+	leg->SetTextSize(.035);
+	// determine histogram with maximum y value for drawing (a bit messy, but for the moment it works)
+	hMax = 0;
+	for (ICIter it = legend.begin(); it != legend.end(); ++it)
+		if (hMax < h_Ep[it->first]->GetBinContent(h_Ep[it->first]->GetMaximumBin())) {
+			hMax = h_Ep[it->first]->GetBinContent(h_Ep[it->first]->GetMaximumBin());
+			iMax = it->first;
+		}
+	h_Ep[iMax]->Draw();
+	for (ICIter it = legend.begin(); it != legend.end(); ++it) {
+		h_Ep[it->first]->Draw("SAME");
+		sprintf(buffer, "E_{p} %s", it->second);
+		leg->AddEntry(h_Ep[it->first], buffer, "l");
+	}
+	leg->Draw("SAME");
+	c->Update();
+	c->Print("plots/proton_energy.pdf");
+*/
+
+	// theta angles final state
+	std::cout << "[INFO] Create plots for theta angles in the final state" << std::endl;
+	l_p = new TList();
+	for (IViIter it = indicesFS.begin(); it != indicesFS.end(); ++it) {
+		c->Clear();
+		leg->Clear();
+		// change legend height according to number of entries that it fits better
+		if (it->second.size() > 5)
+			leg->SetY1NDC(.45);
+		else
+			leg->SetY1NDC(.58);
+		leg->SetHeader("#vartheta FS");
+		if (!hs)
+			delete hs;
+		sprintf(buffer, "h%d%d", count-1, it->first);
+		hs = new THStack(buffer, "");
+		if (!iter)
+			delete iter;
+		iter = new TIter(thetas(p4FS.find(it->first)->second, it->second));
+		j = 0;
+		while (h_tmp = (TH1*)iter->Next()) {
+			if (strstr(h_tmp->GetTitle(), "p")) {  // proton
+				h_tmp->SetTitle(legend.find(it->first)->second);  // store current decay channel in histogram title to use it later for the legend entry
+				l_p->Add(h_tmp);
+			} else {  // histograms of decay particles don't have a histogram title
+				h_tmp->SetLineColor(color[j]);
+				h_tmp->SetFillColor(color[j]);
+				hs->Add(h_tmp);
+				leg->AddEntry(h_tmp, particlesFS.find(it->first)->second[j++], "l");
+			}
+		}
+		// draw the angles of the decay particles
+		c->Clear();
+		hs->Paint();  // TAxis objects of THStack are only created when the Paint function is called, otherwise a segfault occurs
+		prepare_hist(hs, "#vartheta [#circ]");
+		hs->Draw();
+		leg->Draw("SAME");
+		c->Update();
+		sprintf(buffer, "plots/thetas_%s.%s", identifier.find(it->first)->second, ext);
+		c->Print(buffer);
+	}
+	// after iterating over all channels draw the energies of the protons from the different channels now
+	c->Clear();
+	leg->Clear();
+	leg->SetY1NDC(.6);
+	if (!iter)
+		delete iter;
+	iter = new TIter(l_p);
+	j = 0;
+	hMax = 0;
+	while (h_tmp = (TH1*)iter->Next()) {
+		h_tmp->SetLineColor(color[j++]);
+		leg->AddEntry(h_tmp, h_tmp->GetTitle(), "l");
+		h_tmp->SetTitle("");
+		if (hMax < h_tmp->GetBinContent(h_tmp->GetMaximumBin())) {
+			hMax = h_tmp->GetBinContent(h_tmp->GetMaximumBin());
+			iMax = j-1;}
+		//h_tmp->Draw("SAME");
+	}
+	l_p->At(iMax)->Draw();
+	delete iter;
+	iter = new TIter(l_p);
+	while (h_tmp = (TH1*)iter->Next())
+		h_tmp->Draw("SAME");
+	leg->Draw("SAME");
+	c->Update();
+	sprintf(buffer, "plots/proton_thetas.%s", ext);
+	c->Print(buffer);
+
+	delete l_p;
+
+/*	// proton theta
+	c->Clear();
+	TH1F* h_thetap[nChannels];
+	for (UInt_t i = 0; i < nChannels; i++)
+		h_thetap[i] = proton_theta(sim_files[i], color[i]);
+	leg->Clear();
+	leg->SetFillColor(0);
+	leg->SetBorderSize(1);
+	leg->SetTextFont(42);
+	leg->SetTextSize(.035);
+	hMax = 0;
+	for (ICIter it = legend.begin(); it != legend.end(); ++it)
+		if (hMax < h_thetap[it->first]->GetBinContent(h_thetap[it->first]->GetMaximumBin())) {
+			hMax = h_thetap[it->first]->GetBinContent(h_thetap[it->first]->GetMaximumBin());
+			iMax = it->first;
+		}
+	h_thetap[iMax]->Draw();
+	for (ICIter it = legend.begin(); it != legend.end(); ++it) {
+		h_thetap[it->first]->Draw("SAME");
+		sprintf(buffer, "#vartheta_{p} %s", it->second);
+		leg->AddEntry(h_thetap[it->first], buffer, "l");
+	}
+	leg->Draw("SAME");
+	c->Update();
+	c->Print("plots/proton_theta.pdf");
+*/
+/*	// energies decay particles
+//	THStack *hs;
+	for (IViIter it = indicesFS.begin(); it != indicesFS.end(); ++it) {
+		c->Clear();
+		if (!hs)
+			delete hs;
+		hs = energies_stack(sim_files[it->first], color, it->second);
+		leg->Clear();
+		// change legend height according to number of entries that it fits better
+		if (it->second.size() > 4)
+			leg->SetY1NDC(.45);
+		else
+			leg->SetY1NDC(.58);
+		leg->SetFillColor(0);
+		leg->SetBorderSize(1);
+		leg->SetTextFont(42);
+		leg->SetTextSize(.035);
+		leg->SetHeader("Energies FS");
+		if (!iter)
+			delete iter;
+		iter = new TIter(hs->GetHists());
+		j = 0;
+		while (h_tmp = (TH1*)iter->Next())
+			leg->AddEntry(h_tmp, particlesFS.find(it->first)->second[j++], "l");
+		hs->Paint();  // TAxis objects of THStack are only created when the Paint function is called, otherwise a segfault occurs
+		hs->GetXaxis()->SetTitle("E [GeV]");
+		hs->GetYaxis()->SetTitle("#Events");
+		hs->Draw();
+		leg->Draw("SAME");
+		c->Update();
+		sprintf(buffer, "plots/energies_%s.pdf", identifier.find(it->first)->second);
+		c->Print(buffer);
+	}
+*/
+	// theta vs energy angle 2d plots for single final state particles
+	std::cout << "[INFO] Create 2D plots theta angle vs. energy" << std::endl;
+	c2->cd();
+	for (IViIter it = indicesFS.begin(); it != indicesFS.end(); ++it) {
+		if (!iter)
+			delete iter;
+		//iter = new TIter(theta_vs_energy(sim_files[it->first], it->second));
+		iter = new TIter(theta_vs_energy(p4FS.find(it->first)->second, it->second));
+		j = 0;
+		while (h_tmp = (TH2F*)iter->Next()) {
+			c2->Clear();
+			h_tmp->SetTitle(particlesFS.find(it->first)->second[j]);
+			if (particlesFS.find(it->first)->second[j] == "p") {
+				h_tmp->GetYaxis()->SetRangeUser(0, 50);
+				h_tmp->SetTitle("");
+			}
+			h_tmp->Draw("COLZ");
+			sprintf(buffer, "plots/theta_vs_energy_%s_%s.%s", identifier.find(it->first)->second, namesFS.find(it->first)->second[j++], ext);
+			c2->Update();
+			c2->Print(buffer);
+		}
+	}
+
+	return 0;
+}
+
+
+int collect_particles(IntP4Map& p4, const IntVecintMap& idx, const char files[][100], const int nFiles)
+{
+	printf("[INFO] Start collecting final state particles for %d channels . . .\n\n", p4.size());
+
+	TTree* MCTree;
+	Long64_t treeSize;
+	Int_t part;
+	Int_t pid[20];
+	Double_t fE[20];
+	Double_t fPx[20];
+	Double_t fPy[20];
+	Double_t fPz[20];
+
+	for (int n = 0; n < nFiles; n++) {
+		for (constIViIter it = idx.begin(); it != idx.end(); ++it) {
+			TFile f(files[nFiles*it->first+n], "READ");
+			if (!f.IsOpen()) {
+				fprintf(stderr, "Error opening file %s: %s\n", files[it->first], strerror(errno));
+				exit(1);
+			}
+
+			MCTree = (TTree*)f.Get("data");
+			if (!MCTree) {
+				perror("Error opening TTree 'data'");
+				exit(1);
+			}
+			treeSize = MCTree->GetEntries();
+			printf("%d events in file %s\n", treeSize, files[it->first]);
+			/* i will be an iterator over an two-dimensional vector of objects of the type TLorentzVector, as p4.find(it->first)->second delivers this vector inside the p4 map regarding the actually processed channel. The outer vector should have the size of the number of final state particles as described in the second part of the indices map, like the vector is initialized earlier in the main method. So the for loop with the iterator i should have e. g. 6 steps for a decay with 6 particles in the final state. The size of the inner vector, which can be accessed via the iterator i, a pointer to this vector, should be zero in the first run because it isn't initialized in the main method. What we want now is to reserve the expected size of this vector that all the events from the tree file can be stored in it without reallocating memory after every few push_backs. Speeds up the system execution time. Therefore we use the initial size (0 for the first run or the amount of stored events in later loop runs) plus the new size. */
+			for (std::vector<std::vector<TLorentzVector>>::iterator i = p4.find(it->first)->second.begin(); i != p4.find(it->first)->second.end(); ++i)
+				i->reserve(i->size()+treeSize);
+				//std::cout << i->size() << std::endl;  // should be zero for all entries as the vector inside the vector isn't initialized yet
+
+			MCTree->SetMakeClass(1);
+			MCTree->SetBranchAddress("Particles", &part);
+			MCTree->SetBranchAddress("Particles.pid", pid);
+			MCTree->SetBranchAddress("Particles.fE", fE);
+			MCTree->SetBranchAddress("Particles.fP.fX", fPx);
+			MCTree->SetBranchAddress("Particles.fP.fY", fPy);
+			MCTree->SetBranchAddress("Particles.fP.fZ", fPz);
+
+			for (int i = 0; i < treeSize; i++) {
+				if (i == READ_LIMIT) break;  // limiting events read per file to READ_LIMIT due to heavy ram usage...
+				MCTree->GetEntry(i);
+				for (int j = 0; j < it->second.size(); j++)
+					p4.find(it->first)->second[j].push_back(TLorentzVector(1000*fPx[it->second[j]], 1000*fPy[it->second[j]], 1000*fPz[it->second[j]], 1000*fE[it->second[j]]));
+			}
+
+			f.Close();
+		}
+	}
+
+	std::cout << "Finished processing all files." << std::endl;
+
+	return 0;
+}
+
+void prepare_hist(TH1 *h, const char* x_name, const char* y_name, Int_t color)
 {
 	h->GetXaxis()->SetLabelFont(42);
 	h->GetXaxis()->SetLabelSize(.045);
@@ -63,7 +635,136 @@ void prepare_hist(TH1 *h, const char* x_name, const char* y_name = "#Events", In
 	*/
 }
 
-TH1F* proton_energy(const char* file, Int_t color)
+void prepare_hist(THStack *h, const char* x_name, const char* y_name)
+{
+	h->GetXaxis()->SetLabelFont(42);
+	h->GetXaxis()->SetLabelSize(.045);
+	h->GetXaxis()->SetTitleSize(.048);
+	h->GetXaxis()->SetTitleFont(42);
+	h->GetXaxis()->SetTitle(x_name);
+	h->GetYaxis()->SetLabelFont(42);
+	h->GetYaxis()->SetLabelSize(.045);
+	h->GetYaxis()->SetTitleSize(.048);
+	h->GetYaxis()->SetTitleFont(42);
+	h->GetYaxis()->SetTitle(y_name);
+	h->SetTitle("");
+	h->GetYaxis()->SetTitleOffset(1.3);
+	h->GetYaxis()->SetLabelOffset(.008);  // per cent of pad width; standard is .005
+	h->GetYaxis()->SetDecimals();  //show e. g. 1.0 instead of just 1 (same decimals for every label)
+}
+
+TList* energies(const VVP4& p4, const std::vector<int> partIdx)
+{
+	const int nParticles = partIdx.size();
+	char name[5];
+	count++;
+
+	TList *l = new TList();
+
+	TH1F* h[nParticles+2];  // number of particles plus two additional energy sum histograms
+	for (int i = 0; i < nParticles; i++) {
+		sprintf(name, "h%d.%d", count-1, i);
+		h[i] = new TH1F(name, "", 1000, 0, 1000);
+		prepare_hist(h[i], "E [MeV]", "#Events");
+		if (partIdx[i] == 1) {  // mark histogram with proton energy for later usage and set x-axis title to E_p
+			h[i]->SetTitle("p");
+			prepare_hist(h[i], "E_{p} [MeV]", "#Events");
+		}
+	}
+	sprintf(name, "hes%d", count-1);
+	h[nParticles] = new TH1F(name, "Energy Sum", 950, 650, 1600);
+	prepare_hist(h[nParticles], "E_{sum} CB [MeV]", "#Events");
+	sprintf(name, "hec%d", count-1);
+	h[nParticles+1] = new TH1F(name, "ESum thetaConstr", 1600, 0, 1600);
+	prepare_hist(h[nParticles+1], "E_{sum} CB [MeV]", "#Events");
+	// at last one histogram that counts the number of particles in the CB range
+	sprintf(name, "h2e%d", count-1);
+	TH2F *h2 = new TH2F(name, "ESum_nPart", 400, 0, 1600, partIdx.size(), 0, partIdx.size());
+	prepare_hist(h2, "E_{sum} CB [MeV]", "#particles CB");
+
+	double esum, esum_constr, e;
+	int c;  // counter for CB particles
+	for (int j = 0; j < p4[0].size(); j++) {
+		esum = esum_constr = c = 0;
+		for (int i = 0; i < nParticles; i++) {
+			e = p4[i][j].E()-p4[i][j].M();  // indices of particles (which are passed to this method) are coupled to the four-momenta due to collection process, therefore the usage of a simple for-loop with accessing the momenta via i is possible
+			h[i]->Fill(e);
+			if (partIdx[i] != 1) {  // exclude proton (has always id 1) from energy sum
+				esum += e;
+				if (p4[i][j].Theta()*TMath::RadToDeg() > 20. && p4[i][j].Theta()*TMath::RadToDeg() < 160.) {  // only particles in CB range
+					esum_constr += e;
+					c++;
+				}
+			}
+		}
+		h[nParticles]->Fill(esum);
+		h[nParticles+1]->Fill(esum_constr);
+		h2->Fill(esum_constr, c);
+	}
+
+	for (int i = 0; i < nParticles+2; i++)
+		l->Add(h[i]);
+	l->Add(h2);
+
+	return l;
+}
+
+TList* thetas(const VVP4& p4, const std::vector<int> partIdx)
+{
+	const int nParticles = partIdx.size();
+	char name[5];
+	count++;
+
+	TList *l = new TList();
+
+	TH1F* h[nParticles];
+	for (int i = 0; i < nParticles; i++) {
+		sprintf(name, "h%d.%d", count-1, i);
+		if (partIdx[i] == 1) {  // other dimensions needed for proton theta; mark histogram for later usage
+			h[i] = new TH1F(name, "p", 120, 0, 60);
+			prepare_hist(h[i], "#vartheta_{p} [#circ]", "#Events");
+		} else {
+			h[i] = new TH1F(name, "", 360, 0, 180);
+			prepare_hist(h[i], "#vartheta [#circ]", "#Events");
+		}
+	}
+
+	for (int j = 0; j < p4[0].size(); j++)
+		for (int i = 0; i < nParticles; i++)
+			h[i]->Fill(p4[i][j].Theta()*TMath::RadToDeg());
+
+	for (int i = 0; i < nParticles; i++)
+		l->Add(h[i]);
+
+	return l;
+}
+
+TList* theta_vs_energy(const VVP4& p4, const std::vector<int> partIdx)
+{
+	const int nParticles = partIdx.size();
+	char name[5];
+	count++;
+
+	TList *l = new TList();
+
+	TH2F* h[nParticles];
+	for (int i = 0; i < nParticles; i++) {
+		sprintf(name, "h%d.%d", count-1, i);
+		h[i] = new TH2F(name, "", 200, 0, 1000, 180, 0, 180);
+		prepare_hist(h[i], "E [MeV]", "#vartheta [#circ]");
+	}
+
+	for (int j = 0; j < p4[0].size(); j++)
+		for (int i = 0; i < nParticles; i++)
+			h[i]->Fill(p4[i][j].E()-p4[i][j].M(), p4[i][j].Theta()*TMath::RadToDeg());
+
+	for (int i = 0; i < nParticles; i++)
+		l->Add(h[i]);
+
+	return l;
+}
+
+/*TH1F* proton_energy(const char* file, Int_t color)
 {
 	// declare the histogram BEFORE opening the root file, otherwise it will cause a segfault for some strange reason
 	char name[4];
@@ -90,7 +791,7 @@ TH1F* proton_energy(const char* file, Int_t color)
 	Float_t pE;
 
 	MCTree->SetMakeClass(1);
-    MCTree->SetBranchAddress("Particles", &part);
+	MCTree->SetBranchAddress("Particles", &part);
 	MCTree->SetBranchAddress("Particles.pid", pid);
 	MCTree->SetBranchAddress("Particles.fE", fE);
 
@@ -135,7 +836,7 @@ TH1F* proton_theta(const char* file, Int_t color)
 	TLorentzVector p4;
 
 	MCTree->SetMakeClass(1);
-    MCTree->SetBranchAddress("Particles", &part);
+	MCTree->SetBranchAddress("Particles", &part);
 	MCTree->SetBranchAddress("Particles.pid", pid);
 	MCTree->SetBranchAddress("Particles.fP.fX", fPx);
 	MCTree->SetBranchAddress("Particles.fP.fY", fPy);
@@ -191,7 +892,7 @@ THStack* energies_stack(const char* file, Int_t* color, std::vector<int> partIdx
 	TLorentzVector p4[nParticles];
 
 	MCTree->SetMakeClass(1);
-    MCTree->SetBranchAddress("Particles", &part);
+	MCTree->SetBranchAddress("Particles", &part);
 	MCTree->SetBranchAddress("Particles.pid", pid);
 	MCTree->SetBranchAddress("Particles.fP.fX", fPx);
 	MCTree->SetBranchAddress("Particles.fP.fY", fPy);
@@ -202,7 +903,7 @@ THStack* energies_stack(const char* file, Int_t* color, std::vector<int> partIdx
 		MCTree->GetEntry(i);
 		for (int i = 0; i < nParticles; i++) {
 			p4[i].SetXYZT(1000*fPx[partIdx[i]], 1000*fPy[partIdx[i]], 1000*fPz[partIdx[i]], 1000*fE[partIdx[i]]);
-			(*h[i]).Fill(p4[i].T());
+			(*h[i]).Fill(p4[i].E()-p4[i].M());
 		}
 	}
 
@@ -218,9 +919,9 @@ THStack* energies_stack(const char* file, Int_t* color, std::vector<int> partIdx
 	//hs->GetYaxis()->SetTitle("#Events");
 
 	return hs;
-}
+}*/
 
-TList* theta_vs_energy(const char* file, std::vector<int> partIdx)
+/*TList* theta_vs_energy(const char* file, std::vector<int> partIdx)
 {
 	const int nParticles = partIdx.size();
 	char name[5];
@@ -258,7 +959,7 @@ TList* theta_vs_energy(const char* file, std::vector<int> partIdx)
 	TLorentzVector p4[nParticles];
 
 	MCTree->SetMakeClass(1);
-    MCTree->SetBranchAddress("Particles", &part);
+	MCTree->SetBranchAddress("Particles", &part);
 	MCTree->SetBranchAddress("Particles.pid", pid);
 	MCTree->SetBranchAddress("Particles.fP.fX", fPx);
 	MCTree->SetBranchAddress("Particles.fP.fY", fPy);
@@ -269,7 +970,7 @@ TList* theta_vs_energy(const char* file, std::vector<int> partIdx)
 		MCTree->GetEntry(i);
 		for (int i = 0; i < nParticles; i++) {
 			p4[i].SetXYZT(1000*fPx[partIdx[i]], 1000*fPy[partIdx[i]], 1000*fPz[partIdx[i]], 1000*fE[partIdx[i]]);
-			(*h[i]).Fill(p4[i].T(), p4[i].Theta()*TMath::RadToDeg());
+			(*h[i]).Fill(p4[i].E()-p4[i].M(), p4[i].Theta()*TMath::RadToDeg());
 		}
 	}
 
@@ -280,7 +981,7 @@ TList* theta_vs_energy(const char* file, std::vector<int> partIdx)
 	f.Close();
 
 	return l;
-}
+}*/
 
 TH1F* etapEnergy_etap_eeg(const char* file)
 {
@@ -324,428 +1025,9 @@ TH1F* etapEnergy_etap_eeg(const char* file)
 		(*h).Fill((elecP4+posiP4+virtGP4).T());
 	}
 
-	prepare_hist(h, "E_{#eta'} [GeV]");
+	prepare_hist(h, "E_{#eta'} [MeV]");
 	f.Close();
 
 	return h;
-}
-
-int main(int argc, char **argv)
-{
-	char buffer[50];  // buffer for temporary operations
-	double hMax;  // temporary variable to store maximum value of the histogram
-	int iMax;  // index of histogram with maximum
-	TH1 *h_tmp;  // for temporary histogram usage
-	int j;  // counter used for several plots
-	TIter *iter;  // Iterator for TList, used to iterate through THStack
-
-	// vectors used for dynamically changes for histogram stacking and file naming
-	std::vector<int> indices;
-	std::vector<const char*> particles;
-	std::vector<const char*> names;
-
-	enum chan {
-		etap_pi0pi0eta,
-		etap_pi0pi0pi0,
-		etap_pipipi0,
-		etap_omegag,
-		etap_eeg,
-		omega_etag,
-		unknown
-	};
-
-	IntCharMap channel;
-	channel.insert(ICPair(etap_pi0pi0eta, "etap_pi0pi0eta"));
-	channel.insert(ICPair(etap_pi0pi0pi0, "etap_pi0pi0pi0"));
-	channel.insert(ICPair(etap_pipipi0, "etap_pi+pi-pi0"));
-	channel.insert(ICPair(etap_omegag, "etap_omegag"));
-	channel.insert(ICPair(etap_eeg, "etap_e+e-g"));
-	channel.insert(ICPair(omega_etag, "omega_etag"));
-
-	IntCharMap identifier;
-	identifier.insert(ICPair(etap_pi0pi0eta, "etap_pi0pi0eta"));
-	identifier.insert(ICPair(etap_pi0pi0pi0, "etap_pi0pi0pi0"));
-	identifier.insert(ICPair(etap_pipipi0, "etap_pipipi0"));
-	identifier.insert(ICPair(etap_omegag, "etap_omegag"));
-	identifier.insert(ICPair(etap_eeg, "etap_eeg"));
-	identifier.insert(ICPair(omega_etag, "omega_etag"));
-
-	IntCharMap legend;
-	legend.insert(ICPair(etap_pi0pi0eta, "#eta'#rightarrow#pi^{0}#pi^{0}#eta"));
-	legend.insert(ICPair(etap_pi0pi0pi0, "#eta'#rightarrow#pi^{0}#pi^{0}#pi^{0}"));
-	legend.insert(ICPair(etap_pipipi0, "#eta'#rightarrow#pi^{+}#pi^{-}#pi^{0}"));
-	legend.insert(ICPair(etap_omegag, "#eta'#rightarrow#omega#gamma"));
-	legend.insert(ICPair(etap_eeg, "#eta'#rightarrowe^{+}e^{-}#gamma"));
-	legend.insert(ICPair(omega_etag, "#omega#rightarrow#eta#gamma"));
-
-	// general settings: set canvas background to white and hide stat box
-	gStyle->SetCanvasColor(0);
-	gStyle->SetOptStat(0);
-
-	// change contour for 2d plots
-	const Int_t nRGBs = 5;
-	const Int_t nCont = 255;
-
-	Double_t stops[nRGBs] = { 0.00, 0.34, 0.61, 0.84, 1.00 };
-	Double_t red[nRGBs]   = { 0.00, 0.00, 0.87, 1.00, 0.51 };
-	Double_t green[nRGBs] = { 0.00, 0.81, 1.00, 0.20, 0.00 };
-	Double_t blue[nRGBs]  = { 0.51, 1.00, 0.12, 0.00, 0.00 };
-	TColor::CreateGradientColorTable(nRGBs, stops, red, green, blue, nCont);
-	gStyle->SetNumberContours(nCont);
-
-	// create canvas for all plots
-	TCanvas *c = new TCanvas("c", "1D Plots", 10, 10, 700, 600);
-	c->SetBorderSize(2);
-	c->SetFrameFillColor(0);
-	c->SetFrameBorderMode(0);
-	c->SetLeftMargin(.12);
-	c->SetRightMargin(.05);
-	c->SetBottomMargin(.12);
-	c->SetTopMargin(.05);
-	
-	TCanvas *c2 = new TCanvas("c2", "2D Plots", 10, 10, 700, 600);
-	c2->SetBorderSize(2);
-	c2->SetFrameFillColor(0);
-	c2->SetFrameBorderMode(0);
-	c2->SetLeftMargin(.12);
-	c2->SetRightMargin(.13);
-	c2->SetBottomMargin(.12);
-	c2->SetTopMargin(.1);
-	// char array containing the file names
-	const int nChannels = channel.size();
-	const int nFiles = 1;//5;
-	char sim_files[nChannels*nFiles][100];
-	const char* path = "files";//"/data/simulation/background/channels/new_triggerTesting";
-	int n = 0;
-	for (ICIter it = channel.begin(); it != channel.end(); ++it)
-		for (UInt_t i = 1; i <= nFiles; i++)
-			sprintf(sim_files[n++], "%s/sim_%s_%02d.root", path, it->second, i);
-
-	Int_t color[6] = {kRed+1, kAzure, kGreen+2, kOrange-3, kSpring-8, kCyan-3};
-
-	// proton energies
-	c->cd();
-	TH1F* h_Ep[nChannels];
-	for (UInt_t i = 0; i < nChannels; i++)
-		h_Ep[i] = proton_energy(sim_files[i], color[i]);
-	TLegend *leg = new TLegend(.62, .6, .92, .92);
-	leg->SetFillColor(0);
-	leg->SetBorderSize(1);
-	leg->SetTextFont(42);
-	leg->SetTextSize(.035);
-	// determine histogram with maximum y value for drawing (a bit messy, but for the moment it works)
-	hMax = 0;
-	for (ICIter it = legend.begin(); it != legend.end(); ++it)
-		if (hMax < h_Ep[it->first]->GetBinContent(h_Ep[it->first]->GetMaximumBin())) {
-			hMax = h_Ep[it->first]->GetBinContent(h_Ep[it->first]->GetMaximumBin());
-			iMax = it->first;
-		}
-	h_Ep[iMax]->Draw();
-	for (ICIter it = legend.begin(); it != legend.end(); ++it) {
-		h_Ep[it->first]->Draw("SAME");
-		sprintf(buffer, "E_{p} %s", it->second);
-		leg->AddEntry(h_Ep[it->first], buffer, "l");
-	}
-	leg->Draw("SAME");
-	c->Update();
-	c->Print("plots/proton_energy.pdf");
-
-	// proton theta
-	c->Clear();
-	TH1F* h_thetap[nChannels];
-	for (UInt_t i = 0; i < nChannels; i++)
-		h_thetap[i] = proton_theta(sim_files[i], color[i]);
-	leg->Clear();
-	leg->SetFillColor(0);
-	leg->SetBorderSize(1);
-	leg->SetTextFont(42);
-	leg->SetTextSize(.035);
-	hMax = 0;
-	for (ICIter it = legend.begin(); it != legend.end(); ++it)
-		if (hMax < h_thetap[it->first]->GetBinContent(h_thetap[it->first]->GetMaximumBin())) {
-			hMax = h_thetap[it->first]->GetBinContent(h_thetap[it->first]->GetMaximumBin());
-			iMax = it->first;
-		}
-	h_thetap[iMax]->Draw();
-	for (ICIter it = legend.begin(); it != legend.end(); ++it) {
-		h_thetap[it->first]->Draw("SAME");
-		sprintf(buffer, "#vartheta_{p} %s", it->second);
-		leg->AddEntry(h_thetap[it->first], buffer, "l");
-	}
-	leg->Draw("SAME");
-	c->Update();
-	c->Print("plots/proton_theta.pdf");
-
-	// energies decay particles
-	// channel eta' --> pi0 pi0 eta
-	c->Clear();
-	//int indices[] = {6, 7, 8, 9, 10, 11};
-	indices.resize(6);
-	// shorter way of assigning values, possible since C++11
-	indices = {6, 7, 8, 9, 10, 11};
-	particles.resize(6);
-	particles = {"E_{#gamma,1}(#pi^{0}_{1})", "E_{#gamma,2}(#pi^{0}_{1})", "E_{#gamma,3}(#pi^{0}_{2})", "E_{#gamma,4}(#pi^{0}_{2})", "E_{#gamma,5}(#eta)", "E_{#gamma,6}(#eta)"};
-	THStack *hs_E_etap_pi0pi0eta = energies_stack(sim_files[0], color, indices);
-	leg->Clear();
-	leg->SetFillColor(0);
-	leg->SetBorderSize(1);
-	leg->SetTextFont(42);
-	leg->SetTextSize(.035);
-	iter = new TIter(hs_E_etap_pi0pi0eta->GetHists());
-	j = 0;
-	// no idea how to access the histogram from the iterator, maybe I have to define some struct for this...
-	//std::for_each (iter.Begin(), TIter::End(), leg->AddEntry((TH1*)iter, particles[j++], "l"));
-	// I somehow prefer the following way
-	//TObject *o;
-	//while (o = iter.Next())
-	//	leg->AddEntry((TH1*)o, particles[j++], "l");
-	//TH1 *h_tmp; 
-	while (h_tmp = (TH1*)iter->Next())
-		leg->AddEntry(h_tmp, particles[j++], "l");
-	hs_E_etap_pi0pi0eta->Paint();  // TAxis objects of THStack are only created when the Paint function is called, otherwise a segfault occurs
-	hs_E_etap_pi0pi0eta->GetXaxis()->SetTitle("E [GeV]");
-	hs_E_etap_pi0pi0eta->GetYaxis()->SetTitle("#Events");
-	hs_E_etap_pi0pi0eta->Draw();
-	leg->Draw("SAME");
-	c->Update();
-	c->Print("plots/energies_etap_pi0pi0eta.pdf");
-	// this fuckin' root object ownership :-@
-	//delete[] indices;
-	//delete[] particles;
-
-	// channel eta' --> pi0 pi0 pi0
-	c->Clear();
-	indices = {6, 7, 8, 9, 10, 11};
-	particles = {"E_{#gamma,1}(#pi^{0}_{1})", "E_{#gamma,2}(#pi^{0}_{1})", "E_{#gamma,3}(#pi^{0}_{2})", "E_{#gamma,4}(#pi^{0}_{2})", "E_{#gamma,5}(#pi^{0}_{3})", "E_{#gamma,6}(#pi^{0}_{3})"};
-	THStack *hs_E_etap_3pi0 = energies_stack(sim_files[1], color, indices);
-	leg->Clear();
-	leg->SetFillColor(0);
-	leg->SetBorderSize(1);
-	leg->SetTextFont(42);
-	leg->SetTextSize(.035);
-	delete iter;
-	iter = new TIter(hs_E_etap_3pi0->GetHists());
-	j = 0;
-	while (h_tmp = (TH1*)iter->Next())
-		leg->AddEntry(h_tmp, particles[j++], "l");
-	hs_E_etap_3pi0->Paint();  // TAxis objects of THStack are only created when the Paint function is called, otherwise a segfault occurs
-	hs_E_etap_3pi0->GetXaxis()->SetTitle("E [GeV]");
-	hs_E_etap_3pi0->GetYaxis()->SetTitle("#Events");
-	hs_E_etap_3pi0->Draw();
-	leg->Draw("SAME");
-	c->Update();
-	c->Print("plots/energies_etap_pi0pi0pi0.pdf");
-
-	// channel eta' --> pi+ pi- pi0
-	c->Clear();
-	indices.resize(4);
-	particles.resize(4);
-	indices = {3, 4, 6, 7};
-	particles = {"E_{#pi^{+}}", "E_{#pi^{-}}", "E_{#gamma,1}(#pi^{0})", "E_{#gamma,2}(#pi^{0})"};
-	THStack *hs_E_etap_pipipi0 = energies_stack(sim_files[2], color, indices);
-	leg->Clear();
-	leg->SetFillColor(0);
-	leg->SetBorderSize(1);
-	leg->SetTextFont(42);
-	leg->SetTextSize(.035);
-	delete iter;
-	iter = new TIter(hs_E_etap_pipipi0->GetHists());
-	j = 0;
-	while (h_tmp = (TH1*)iter->Next())
-		leg->AddEntry(h_tmp, particles[j++], "l");
-	hs_E_etap_pipipi0->Paint();  // TAxis objects of THStack are only created when the Paint function is called, otherwise a segfault occurs
-	hs_E_etap_pipipi0->GetXaxis()->SetTitle("E [GeV]");
-	hs_E_etap_pipipi0->GetYaxis()->SetTitle("#Events");
-	hs_E_etap_pipipi0->Draw();
-	leg->Draw("SAME");
-	c->Update();
-	c->Print("plots/energies_etap_pipipi0.pdf");
-
-	// channel eta' --> omega gamma
-	c->Clear();
-	indices = {4, 6, 7, 8};
-	particles = {"E_{#gamma,1}", "E_{#gamma,2}(#omega)", "E_{#gamma,3}(#eta)", "E_{#gamma,4}(#eta)"};
-	THStack *hs_E_etap_omegag = energies_stack(sim_files[3], color, indices);
-	leg->Clear();
-	leg->SetFillColor(0);
-	leg->SetBorderSize(1);
-	leg->SetTextFont(42);
-	leg->SetTextSize(.035);
-	delete iter;
-	iter = new TIter(hs_E_etap_omegag->GetHists());
-	j = 0;
-	while (h_tmp = (TH1*)iter->Next())
-		leg->AddEntry(h_tmp, particles[j++], "l");
-	hs_E_etap_omegag->Paint();  // TAxis objects of THStack are only created when the Paint function is called, otherwise a segfault occurs
-	hs_E_etap_omegag->GetXaxis()->SetTitle("E [GeV]");
-	hs_E_etap_omegag->GetYaxis()->SetTitle("#Events");
-	hs_E_etap_omegag->Draw();
-	leg->Draw("SAME");
-	c->Update();
-	c->Print("plots/energies_etap_omegag.pdf");
-
-	// channel eta' --> e+ e- gamma
-	c->Clear();
-	indices.resize(3);
-	particles.resize(3);
-	indices = {5, 6, 4};
-	particles = {"E_{e^{+}}", "E_{e^{-}}", "E_{#gamma}"};
-	THStack *hs_E_etap_eeg = energies_stack(sim_files[4], color, indices);
-	leg->Clear();
-	leg->SetFillColor(0);
-	leg->SetBorderSize(1);
-	leg->SetTextFont(42);
-	leg->SetTextSize(.035);
-	delete iter;
-	iter = new TIter(hs_E_etap_eeg->GetHists());
-	j = 0;
-	while (h_tmp = (TH1*)iter->Next())
-		leg->AddEntry(h_tmp, particles[j++], "l");
-	hs_E_etap_eeg->Paint();  // TAxis objects of THStack are only created when the Paint function is called, otherwise a segfault occurs
-	hs_E_etap_eeg->GetXaxis()->SetTitle("E [GeV]");
-	hs_E_etap_eeg->GetYaxis()->SetTitle("#Events");
-	hs_E_etap_eeg->Draw();
-	leg->Draw("SAME");
-	c->Update();
-	c->Print("plots/energies_etap_eeg.pdf");
-
-	// channel omega --> eta gamma
-	c->Clear();
-	indices = {4, 5, 6};
-	particles = {"E_{#gamma,1}(#omega)", "E_{#gamma,2}(#eta)", "E_{#gamma,3}(#eta)"};
-	THStack *hs_E_omega_etag = energies_stack(sim_files[5], color, indices);
-	leg->Clear();
-	leg->SetFillColor(0);
-	leg->SetBorderSize(1);
-	leg->SetTextFont(42);
-	leg->SetTextSize(.035);
-	delete iter;
-	iter = new TIter(hs_E_omega_etag->GetHists());
-	j = 0;
-	while (h_tmp = (TH1*)iter->Next())
-		leg->AddEntry(h_tmp, particles[j++], "l");
-	hs_E_omega_etag->Paint();  // TAxis objects of THStack are only created when the Paint function is called, otherwise a segfault occurs
-	hs_E_omega_etag->GetXaxis()->SetTitle("E [GeV]");
-	hs_E_omega_etag->GetYaxis()->SetTitle("#Events");
-	hs_E_omega_etag->Draw();
-	leg->Draw("SAME");
-	c->Update();
-	c->Print("plots/energies_omega_etag.pdf");
-
-	// theta vs energy angle 2d plots for single final state particles
-	// channel eta' --> pi0 pi0 eta
-	c2->cd();
-	indices.resize(6);
-	indices = {6, 7, 8, 9, 10, 11};
-	particles.resize(6);
-	particles = {"#gamma_{1}(#pi^{0}_{1})", "#gamma_{2}(#pi^{0}_{1})", "#gamma_{3}(#pi^{0}_{2})", "#gamma_{4}(#pi^{0}_{2})", "#gamma_{5}(#eta)", "#gamma_{6}(#eta)"};
-	names.resize(6);
-	names = {"gamma1", "gamma2", "gamma3", "gamma4", "gamma5", "gamma6"};
-	//TList *l_etap_pi0pi0eta = theta_vs_energy(sim_files[etap_pi0pi0eta], indices);
-	//iter = new TIter(l_etap_pi0pi0eta);
-	delete iter;
-	iter = new TIter(theta_vs_energy(sim_files[etap_pi0pi0eta], indices));
-	j = 0;
-	while (h_tmp = (TH2F*)iter->Next()) {
-		c2->Clear();
-		h_tmp->SetTitle(particles[j]);
-		h_tmp->Draw("COLZ");
-		sprintf(buffer, "plots/theta_vs_energy_%s_%s.pdf", identifier.find(etap_pi0pi0eta)->second, names[j++]);
-		c2->Update();
-		c2->Print(buffer);
-	}
-
-	// channel eta' --> pi0 pi0 pi0
-	c2->cd();
-	indices = {6, 7, 8, 9, 10, 11};
-	particles = {"#gamma_{1}(#pi^{0}_{1})", "#gamma_{2}(#pi^{0}_{1})", "#gamma_{3}(#pi^{0}_{2})", "#gamma_{4}(#pi^{0}_{2})", "#gamma_{5}(#pi^{0}_{3})", "#gamma_{6}(#pi^{0}_{3})"};
-	names = {"gamma1", "gamma2", "gamma3", "gamma4", "gamma5", "gamma6"};
-	delete iter;
-	iter = new TIter(theta_vs_energy(sim_files[etap_pi0pi0pi0], indices));
-	j = 0;
-	while (h_tmp = (TH2F*)iter->Next()) {
-		c2->Clear();
-		h_tmp->SetTitle(particles[j]);
-		h_tmp->Draw("COLZ");
-		sprintf(buffer, "plots/theta_vs_energy_%s_%s.pdf", identifier.find(etap_pi0pi0pi0)->second, names[j++]);
-		c2->Update();
-		c2->Print(buffer);
-	}
-
-	// channel eta' --> pi+ pi- pi0
-	c2->cd();
-	indices.resize(4);
-	particles.resize(4);
-	names.resize(4);
-	indices = {3, 4, 6, 7};
-	particles = {"#pi^{+}", "#pi^{-}", "#gamma_{1}", "#gamma_{2}"};
-	names = {"pi1", "pi2", "gamma1", "gamma2"};
-	delete iter;
-	iter = new TIter(theta_vs_energy(sim_files[etap_pipipi0], indices));
-	j = 0;
-	while (h_tmp = (TH2F*)iter->Next()) {
-		c2->Clear();
-		h_tmp->SetTitle(particles[j]);
-		h_tmp->Draw("COLZ");
-		sprintf(buffer, "plots/theta_vs_energy_%s_%s.pdf", identifier.find(etap_pipipi0)->second, names[j++]);
-		c2->Update();
-		c2->Print(buffer);
-	}
-
-	// channel eta' --> omega gamma
-	c2->cd();
-	indices = {4, 6, 7, 8};
-	particles = {"#gamma_{1}", "#gamma_{2}(#omega)", "#gamma_{3}(#eta)", "#gamma_{4}(#eta)"};
-	names = {"gamma1", "gamma2", "gamma3", "gamma4"};
-	delete iter;
-	iter = new TIter(theta_vs_energy(sim_files[etap_omegag], indices));
-	j = 0;
-	while (h_tmp = (TH2F*)iter->Next()) {
-		c2->Clear();
-		h_tmp->SetTitle(particles[j]);
-		h_tmp->Draw("COLZ");
-		sprintf(buffer, "plots/theta_vs_energy_%s_%s.pdf", identifier.find(etap_omegag)->second, names[j++]);
-		c2->Update();
-		c2->Print(buffer);
-	}
-
-	// channel eta' --> e+ e- gamma
-	c2->cd();
-	indices.resize(3);
-	particles.resize(3);
-	names.resize(3);
-	indices = {5, 6, 4};
-	particles = {"e^{+}", "e^{-}", "#gamma"};
-	names = {"e1", "e2", "gamma"};
-	delete iter;
-	iter = new TIter(theta_vs_energy(sim_files[etap_eeg], indices));
-	j = 0;
-	while (h_tmp = (TH2F*)iter->Next()) {
-		c2->Clear();
-		h_tmp->SetTitle(particles[j]);
-		h_tmp->Draw("COLZ");
-		sprintf(buffer, "plots/theta_vs_energy_%s_%s.pdf", identifier.find(etap_eeg)->second, names[j++]);
-		c2->Update();
-		c2->Print(buffer);
-	}
-
-	// channel omega --> eta gamma
-	c2->cd();
-	indices = {4, 5, 6};
-	particles = {"#gamma_{1}(#omega)", "#gamma_{2}(#eta)", "#gamma_{3}(#eta)"};
-	names = {"gamma1", "gamma2", "gamma3"};
-	delete iter;
-	iter = new TIter(theta_vs_energy(sim_files[omega_etag], indices));
-	j = 0;
-	while (h_tmp = (TH2F*)iter->Next()) {
-		c2->Clear();
-		h_tmp->SetTitle(particles[j]);
-		h_tmp->Draw("COLZ");
-		sprintf(buffer, "plots/theta_vs_energy_%s_%s.pdf", identifier.find(omega_etag)->second, names[j++]);
-		c2->Update();
-		c2->Print(buffer);
-	}
-
-	return 0;
 }
 
