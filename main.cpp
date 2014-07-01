@@ -59,11 +59,7 @@ void prepare_hist(THStack *h, const char* x_name, const char* y_name = "#Events"
 TList* energies(const VVP4& p4, const std::vector<int> partIdx);
 TList* thetas(const VVP4& p4, const std::vector<int> partIdx);
 TList* theta_vs_energy(const VVP4& p4, const std::vector<int> partIdx);
-/*TH1F* proton_energy(const char* file, Int_t color);
-TH1F* proton_theta(const char* file, Int_t color);
-THStack* energies_stack(const char* file, Int_t* color, std::vector<int> partIdx);
-TList* theta_vs_energy(const char* file, std::vector<int> partIdx);
-*/TH1F* etapEnergy_etap_eeg(const char* file);
+TH1F* etapEnergy_etap_eeg(const char* file);
 
 int main(int argc, char **argv)
 {
@@ -159,7 +155,7 @@ int main(int argc, char **argv)
 	const int nFiles = 1;//5;
 	char sim_files[nChannels*nFiles][100];
 	const char* path = "/data/simulation/background/channels/new_triggerTesting_5M";
-	const char* ext = "pdf";
+	const char* ext = "png";
 	const char* save = "plots";
 	// READ_LIMIT is set above before method declarations
 	std::cout << "The following data path will be used: " << path << std::endl
@@ -179,7 +175,7 @@ int main(int argc, char **argv)
 	struct stat s;
 	if (stat(save, &s)) {  // directory cannot be accessed, seems to not exist, create it
 		std::cout << "Create save directory " << save << std::endl;
-		if(!mkdir(save, S_IRWXU))
+		if (!mkdir(save, S_IRWXU))
 			std::cout << "Directory created successfully." << std::endl << std::endl;
 		else {
 			perror("Creating directory failed: ");
@@ -253,7 +249,8 @@ int main(int argc, char **argv)
 	c->cd();
 	THStack *hs_E = new THStack("hs_E", "");
 	TList *l_p = new TList();  // list containing proton energy histograms
-	TList *l_c = new TList();  // list containing 2D histograms of #patricles in CB vs. theta constrained ESum
+	TList *l_cc = new TList();  // list containing 2D histograms of #patricles in CB vs. theta constrained ESum
+	TList *l_ct = new TList();  // list containing 2D histograms of #patricles in TAPS vs. theta constrained ESum
 	for (IViIter it = indicesFS.begin(); it != indicesFS.end(); ++it) {
 		c->Clear();
 		leg->Clear();
@@ -284,6 +281,12 @@ int main(int argc, char **argv)
 				sprintf(buffer, "%s/energy_sum_%s.%s", save, identifier.find(it->first)->second, ext);
 				c->Print(buffer);
 			} else if (strstr(h_tmp->GetTitle(), "ESum thetaConstr")) {
+				h_tmp->SetLineColor(color[2]);  // as the full energy sum is saved before the constrained one in the list, first draw both combined before deleting the ESum of the FS from the canvas
+				h_tmp->SetTitle("");
+				h_tmp->Draw("SAME");
+				c->Update();
+				sprintf(buffer, "%s/energy_sum_combined_%s.%s", save, identifier.find(it->first)->second, ext);
+				c->Print(buffer);
 				c->Clear();
 				h_tmp->SetLineColor(color[1]);
 				h_tmp->SetTitle("");
@@ -298,11 +301,20 @@ int main(int argc, char **argv)
 			} else if (strstr(h_tmp->GetTitle(), "ESum_nPart")) {
 				c2->cd();
 				c2->Clear();
-				h_tmp->SetTitle("");
-				l_c->Add(h_tmp);
+				char det[5] = "test";
+				if (strstr(h_tmp->GetTitle(), "CB")) {
+					strcpy(det, "CB");
+					h_tmp->SetTitle("");
+					l_cc->Add(h_tmp);
+				}
+				else if (strstr(h_tmp->GetTitle(), "TAPS")) {
+					strcpy(det, "TAPS");
+					h_tmp->SetTitle("");
+					l_ct->Add(h_tmp);
+				}
 				h_tmp->Draw("COLZ");
 				c2->Update();
-				sprintf(buffer, "%s/nPart_vs_ESumConstr_%s.%s", save, identifier.find(it->first)->second, ext);
+				sprintf(buffer, "%s/nPart_vs_ESumConstr_%s_%s.%s", save, det, identifier.find(it->first)->second, ext);
 				c2->Print(buffer);
 				c->cd();
 			} else {  // histograms of decay particles don't have a histogram title
@@ -371,20 +383,31 @@ int main(int argc, char **argv)
 	leg->SetX2NDC(.94);
 	leg->SetY2NDC(.94);
 	// lastly draw a summed up 2D histogram of all particle count vs. ESum hists
+	// CB
 	c2->cd();
 	c2->Clear();
-	h_tmp = (TH2F*)l_c->First()->Clone("h_tmp");
+	h_tmp = (TH2F*)l_cc->First()->Clone("h_tmp");
 	h_tmp->Reset();
-	h_tmp->Merge(l_c);
+	h_tmp->Merge(l_cc);
 	h_tmp->Draw("COLZ");
 	c2->Update();
-	sprintf(buffer, "%s/nPart_vs_ESumConstr_sum.%s", save, ext);
+	sprintf(buffer, "%s/nPart_vs_ESumConstr_sum_CB.%s", save, ext);
+	c2->Print(buffer);
+	// TAPS
+	c2->Clear();
+	h_tmp = (TH2F*)l_ct->First()->Clone("h_tmp");
+	h_tmp->Reset();
+	h_tmp->Merge(l_ct);
+	h_tmp->Draw("COLZ");
+	c2->Update();
+	sprintf(buffer, "%s/nPart_vs_ESumConstr_sum_TAPS.%s", save, ext);
 	c2->Print(buffer);
 	c->cd();
-		
+
 	delete hs_E;
 	delete l_p;
-	delete l_c;
+	delete l_cc;
+	delete l_ct;
 
 	// theta angles final state
 	std::cout << "[INFO] Create plots for theta angles in the final state" << std::endl;
@@ -452,7 +475,7 @@ int main(int argc, char **argv)
 		h_tmp->Draw("SAME");
 	leg->Draw("SAME");
 	c->Update();
-	sprintf(buffer, "%ss/proton_thetas.%s", save, ext);
+	sprintf(buffer, "%s/proton_thetas.%s", save, ext);
 	c->Print(buffer);
 
 	delete l_p;
@@ -607,38 +630,50 @@ TList* energies(const VVP4& p4, const std::vector<int> partIdx)
 	}
 	sprintf(name, "hes%d", count-1);
 	h[nParticles] = new TH1F(name, "Energy Sum", 950, 650, 1600);
-	prepare_hist(h[nParticles], "E_{sum} CB [MeV]", "#Events");
+	prepare_hist(h[nParticles], "E_{sum} FS [MeV]", "#Events");
 	sprintf(name, "hec%d", count-1);
 	h[nParticles+1] = new TH1F(name, "ESum thetaConstr", 1600, 0, 1600);
 	prepare_hist(h[nParticles+1], "E_{sum} CB [MeV]", "#Events");
-	// at last one histogram that counts the number of particles in the CB range
-	sprintf(name, "h2e%d", count-1);
-	TH2F *h2 = new TH2F(name, "ESum_nPart", 400, 0, 1600, partIdx.size(), 0, partIdx.size());
+	// at last two histograms that count the number of particles in the CB and TAPS range
+	sprintf(name, "h2c%d", count-1);
+	TH2F *h2 = new TH2F(name, "ESum_nPart_CB", 400, 0, 1600, partIdx.size(), 0, partIdx.size());
 	prepare_hist(h2, "E_{sum} CB [MeV]", "#particles CB");
+	sprintf(name, "h2t%d", count);
+	TH2F *h3 = new TH2F(name, "ESum_nPart_TAPS", 400, 0, 1600, partIdx.size(), 0, partIdx.size());
+	prepare_hist(h3, "E_{sum} TAPS [MeV]", "#particles TAPS");
 
-	double esum, esum_constr, e;
-	int c;  // counter for CB particles
+	double esum, esum_constrCB, esum_constrTAPS, e;
+	int c, t;  // counter for CB/TAPS particles
 	for (int j = 0; j < p4[0].size(); j++) {
-		esum = esum_constr = c = 0;
+		esum = esum_constrCB = esum_constrTAPS = c = t = 0;
 		for (int i = 0; i < nParticles; i++) {
 			e = p4[i][j].E()-p4[i][j].M();  // indices of particles (which are passed to this method) are coupled to the four-momenta due to collection process, therefore the usage of a simple for-loop with accessing the momenta via i is possible
 			h[i]->Fill(e);
 			if (partIdx[i] != 1) {  // exclude proton (has always id 1) from energy sum
 				esum += e;
 				if (p4[i][j].Theta()*TMath::RadToDeg() > 20. && p4[i][j].Theta()*TMath::RadToDeg() < 160.) {  // only particles in CB range
-					esum_constr += e;
+					esum_constrCB += e;
 					c++;
+				} else if (p4[i][j].Theta()*TMath::RadToDeg() <= 20.) {  // only particles in TAPS
+					esum_constrTAPS += e;
+					t++;
 				}
 			}
 		}
 		h[nParticles]->Fill(esum);
-		h[nParticles+1]->Fill(esum_constr);
-		h2->Fill(esum_constr, c);
+		/* only fill spectra when esum != 0, i. e. c or t counter greater than zero */
+		if (c) {
+			h[nParticles+1]->Fill(esum_constrCB);
+			h2->Fill(esum_constrCB, c);
+		}
+		if (t)
+			h3->Fill(esum_constrTAPS, t);
 	}
 
 	for (int i = 0; i < nParticles+2; i++)
 		l->Add(h[i]);
 	l->Add(h2);
+	l->Add(h3);
 
 	return l;
 }
